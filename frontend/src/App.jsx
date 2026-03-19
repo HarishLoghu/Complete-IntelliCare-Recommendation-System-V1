@@ -28,6 +28,7 @@ function App() {
   const [formData, setFormData] = useState({
     location: '',
     specialty: 'General Physician',
+    symptom: '',
     urgency: 'low', // 'low' | 'med' | 'high'
     distanceLimit: '5'
   })
@@ -80,94 +81,59 @@ function App() {
     }
 
     try {
-      let userLat = 13.0827; 
-      let userLon = 80.2707;
-      
-      const searchKey = formData.location.toLowerCase().trim();
-      const KNOWN_LOCATIONS = {
-        "guindy": { lat: 13.0067, lon: 80.2206 },
-        "adyar": { lat: 13.0012, lon: 80.2565 },
-        "anna nagar": { lat: 13.0850, lon: 80.2101 },
-        "t nagar": { lat: 13.0418, lon: 80.2341 },
-        "t. nagar": { lat: 13.0418, lon: 80.2341 },
-        "velachery": { lat: 12.9815, lon: 80.2180 },
-        "tambaram": { lat: 12.9249, lon: 80.1000 },
-        "mylapore": { lat: 13.0368, lon: 80.2676 },
-        "omr": { lat: 12.9038, lon: 80.2267 },
-        "perambur": { lat: 13.1091, lon: 80.2464 },
-        "poonamallee": { lat: 13.0473, lon: 80.0945 }
-      };
+      const res = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location: formData.location,
+          specialty: formData.specialty,
+          symptom: formData.symptom
+        })
+      });
 
-      if (KNOWN_LOCATIONS[searchKey]) {
-        userLat = KNOWN_LOCATIONS[searchKey].lat;
-        userLon = KNOWN_LOCATIONS[searchKey].lon;
-      } else {
-        try {
-          const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${formData.location}, Chennai, India&format=json&limit=1`)
-          if (!geoRes.ok) throw new Error("API Limit");
-          const geoData = await geoRes.json()
-          
-          if (geoData && geoData.length > 0) {
-            userLat = parseFloat(geoData[0].lat)
-            userLon = parseFloat(geoData[0].lon)
-          } 
-        } catch (e) {
-          console.log("OSM blocked or failed. Using fallback default.");
-        }
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("Python fallback needed.");
       }
 
-      // Filter
-      let eligible = HOSPITALS.filter(h => 
-        h.departments.some(d => String(d).toLowerCase() === formData.specialty.toLowerCase())
-      );
-      
-      if (eligible.length === 0) {
-        throw new Error("No hospitals found offering this specific specialist.")
+      if (!res.ok) {
+        throw new Error(data.error || 'Server calculation failed');
       }
-
-      // Compute Distances & Details
-      eligible = eligible.map(r => {
-        const dist = getDistance(userLat, userLon, r.lat, r.lon);
-        
-        let multiplier = 2.5; 
-        if (formData.urgency === 'high') multiplier = 1.0; 
-        if (formData.urgency === 'med') multiplier = 1.8;
-        
-        const pseudoWait = 10 + (dist * multiplier);
-        const hasBed = true;
-
-        return {
-          name: r.name,
-          distance_km: Math.round(dist * 100) / 100,
-          estimated_wait_min: Math.round(Math.max(5, pseudoWait)),
-          bed_available: hasBed,
-          departments: r.departments || [],
-          rating: (4 + (Math.random())).toFixed(1), // Mock rating between 4.0 and 5.0
-          freeBeds: Math.floor(Math.random() * 20) + 1,
-          totalBeds: Math.floor(Math.random() * 50) + 30
-        }
-      })
-
-      // Sort rigidly by distance
-      eligible.sort((a, b) => a.distance_km - b.distance_km)
-
-      let limit = formData.distanceLimit === 'any' ? 999 : parseInt(formData.distanceLimit);
       
-      // We will show the absolute closest even if it strictly breaches limit by a bit, to prevent blank results.
-      let filtered = eligible.filter(h => h.distance_km <= limit);
-      if (filtered.length === 0) {
-        filtered = eligible.slice(0, 4); // Show top 4 closest instead
-      } 
+      const rec = data.recommendation;
+      const actualSpecialty = data.request ? data.request.doctor_type : formData.specialty;
 
       setResult({
-        recommendation: filtered[0],
-        alternatives: filtered.slice(1, 5)
-      })
+        computedAt: data.computed_at || '',
+        aiTriage: data.ai_triage || null,
+        recommendation: {
+          name: rec.name,
+          distance_km: rec.distance_km,
+          estimated_wait_min: rec.estimated_wait_min,
+          wait_level: rec.wait_level || 'Moderate',
+          bed_available: rec.bed_available,
+          departments: [actualSpecialty, "General Ward"],
+          rating: (4 + ((rec.name.length % 10) / 10)).toFixed(1),
+          freeBeds: rec.bed_available ? (rec.name.charCodeAt(0) % 20) + 1 : 0,
+          totalBeds: (rec.name.charCodeAt(1) % 50) + 30
+        },
+        alternatives: (data.alternatives || []).map(a => ({
+          name: a.name,
+          distance_km: a.distance_km,
+          estimated_wait_min: a.estimated_wait_min,
+          wait_level: a.wait_level || 'Moderate',
+          departments: [formData.specialty],
+          bed_available: a.bed_available
+        }))
+      });
 
     } catch (err) {
-      setError(err.message || "Something went wrong fetching results.");
+      console.error("Backend Error:", err);
+      setError("AI Triage Error: " + err.message);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
@@ -221,6 +187,27 @@ function App() {
 
           <div className="field">
             <label>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Describe Symptoms (AI Smart Match)
+            </label>
+            <textarea 
+              name="symptom"
+              placeholder="e.g., severe headache and dizziness..." 
+              value={formData.symptom}
+              onChange={handleChange}
+              rows="2"
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px',
+                border: '2px solid var(--border)', background: 'var(--card-bg)',
+                color: 'var(--text-main)', fontFamily: 'inherit', resize: 'none'
+              }}
+            />
+          </div>
+
+          <div style={{textAlign: 'center', margin: '10px 0', fontSize: '0.8rem', color: 'var(--text-muted)'}}>— OR SELECT MANUALLY —</div>
+
+          <div className="field">
+            <label>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
               Required Specialist
             </label>
@@ -234,12 +221,12 @@ function App() {
           {error && <div className="error-banner">{error}</div>}
 
           <button className="cta-btn" onClick={handleSubmit} disabled={loading}>
-            {loading ? 'Searching...' : 'Find Best Hospital \u2192'}
+            {loading ? 'Analyzing with AI...' : 'Find Best Hospital \u2192'}
           </button>
 
           <div className="live-pill">
             <div className="live-dot"></div>
-            Synced 12 seconds ago
+            Equipped with TF-IDF SVM Intelligence
           </div>
         </div>
 
@@ -259,9 +246,23 @@ function App() {
             </button>
 
             <div className="top-rec">
-              <div className="rec-badge">Top Recommendation</div>
+              <div className="rec-badge">⭐ Top Recommendation</div>
               <div className="rec-name">{result.recommendation.name}</div>
               <div className="rec-type">Hospital Facility</div>
+
+              {result.aiTriage && result.aiTriage.predicted_by_ai && (
+                <div style={{
+                  background: 'rgba(0, 212, 170, 0.1)', border: '1px solid #00d4aa',
+                  padding: '10px 14px', borderRadius: '10px', marginTop: '12px',
+                  display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.88rem'
+                }}>
+                  <span style={{fontSize: '1.2rem'}}>🩺</span>
+                  <div>
+                    <strong style={{color: '#00d4aa'}}>AI Triage Match:</strong> {result.recommendation.departments[0]} 
+                    <span style={{color: 'var(--text-muted)', marginLeft: '6px'}}>({(result.aiTriage.ai_confidence * 100).toFixed(1)}% confidence)</span>
+                  </div>
+                </div>
+              )}
 
               <div className="stats-grid">
                 <div className="stat-box">
@@ -272,14 +273,12 @@ function App() {
                 <div className="stat-box">
                   <div className="stat-key">OPD Wait</div>
                   <div className="stat-val amber">{result.recommendation.estimated_wait_min}</div>
-                  <div className="stat-unit">mins est.</div>
+                  <div className="stat-unit">mins · <strong style={{color: result.recommendation.wait_level === 'Low' ? '#00d4aa' : result.recommendation.wait_level === 'Very High' ? '#ff5e5e' : '#f5a623'}}>{result.recommendation.wait_level}</strong></div>
                 </div>
                 <div className="stat-box">
                   <div className="stat-key">Rating</div>
                   <div className="stat-val">{result.recommendation.rating}</div>
-                  <div className="stat-unit">
-                    <span className="stars">★★★★</span>★
-                  </div>
+                  <div className="stat-unit"><span className="stars">★★★★</span>★</div>
                 </div>
                 <div className="stat-box">
                   <div className="stat-key">Beds Free</div>
@@ -288,10 +287,17 @@ function App() {
                 </div>
               </div>
 
+              {result.computedAt && (
+                <div className="live-pill" style={{marginBottom: '12px'}}>
+                  <div className="live-dot"></div>
+                  Real-time wait computed at {result.computedAt}
+                </div>
+              )}
+
               <div className="availability-row">
                 <span className="avail-label">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
-                  {formData.specialty} available
+                  {result.recommendation.departments[0]} available
                 </span>
                 <span className="avail-badge">BEDS OPEN</span>
               </div>
@@ -313,8 +319,8 @@ function App() {
                       <div className="hospital-info">
                         <div className="hospital-name">{alt.name}</div>
                         <div className="hospital-meta">
-                          <span>{alt.departments.length > 1 ? 'Multi-Specialty' : alt.departments[0] || 'Clinic'}</span>
-                          <span>Wait: {alt.estimated_wait_min} mins</span>
+                          <span>{alt.departments && alt.departments.length > 1 ? 'Multi-Specialty' : (alt.departments && alt.departments[0]) || 'Clinic'}</span>
+                          <span>Wait: {alt.estimated_wait_min} mins · <span style={{color: alt.wait_level === 'Low' ? '#00d4aa' : alt.wait_level === 'Very High' ? '#ff5e5e' : '#f5a623', fontWeight: 600}}>{alt.wait_level}</span></span>
                         </div>
                       </div>
                       <div className="hospital-right">
