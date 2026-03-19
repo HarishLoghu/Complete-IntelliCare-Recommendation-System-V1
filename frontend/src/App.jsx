@@ -2,6 +2,44 @@ import { useState, useEffect } from 'react'
 import { HOSPITALS } from './hospitalsData'
 import './App.css'
 
+// Leaflet GIS Mapping Imports
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
+
+// Fix for default marker icon issue in React Leaflet
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+// Custom Marker Icons for distinct colors
+const userIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+});
+
+const hospitalIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+});
+
+// Component to dynamically fit the map to show both markers
+function ChangeMapCenter({ userCoords, hospitalCoords }) {
+  const map = useMap();
+  useEffect(() => {
+    if (userCoords && hospitalCoords) {
+      const bounds = L.latLngBounds([userCoords, hospitalCoords]);
+      map.fitBounds(bounds, { padding: [30, 30] }); // adds padding to see markers clearly
+    }
+  }, [userCoords, hospitalCoords, map]);
+  return null;
+}
+
 const SPECIALTIES = [
   "Orthopedician",
   "Cardiologist",
@@ -108,6 +146,8 @@ function App() {
       setResult({
         computedAt: data.computed_at || '',
         aiTriage: data.ai_triage || null,
+        userCoords: data.request && data.request.user_coordinates ? [data.request.user_coordinates.lat, data.request.user_coordinates.lon] : null,
+        hospitalCoords: rec.coordinates ? [rec.coordinates.lat, rec.coordinates.lon] : null,
         recommendation: {
           name: rec.name,
           distance_km: rec.distance_km,
@@ -309,9 +349,56 @@ function App() {
               </div>
             </div>
 
+            {/* ── LIVE INTERACTIVE GIS MAP ── */}
+            {result.userCoords && result.hospitalCoords && (
+              <div style={{
+                marginTop: '15px', borderRadius: '15px', overflow: 'hidden',
+                height: '280px', border: '2px solid var(--border)', zIndex: 1,
+                position: 'relative'
+              }}>
+                <MapContainer 
+                  center={result.userCoords} 
+                  zoom={12} 
+                  style={{ height: '100%', width: '100%' }}
+                  zoomControl={false}
+                >
+                  <TileLayer
+                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                  />
+                  <ChangeMapCenter userCoords={result.userCoords} hospitalCoords={result.hospitalCoords} />
+                  
+                  {/* User Marker */}
+                  <Marker position={result.userCoords} icon={userIcon}>
+                    <Popup>Your Location</Popup>
+                  </Marker>
+                  
+                  {/* Hospital Marker */}
+                  <Marker position={result.hospitalCoords} icon={hospitalIcon}>
+                    <Popup>{result.recommendation.name}</Popup>
+                  </Marker>
+
+                  {/* Connecting Line (Air Vector Router) */}
+                  <Polyline 
+                    positions={[result.userCoords, result.hospitalCoords]} 
+                    color="#00d4aa" 
+                    weight={4} 
+                    opacity={0.9}
+                  />
+                </MapContainer>
+                <div style={{
+                  position: 'absolute', bottom: '10px', right: '10px', 
+                  zIndex: 1000, background: 'var(--card-bg)', padding: '5px 10px',
+                  borderRadius: '10px', fontSize: '0.75rem', border: '1px solid var(--border)'
+                }}>
+                  Live Route trace plotting ✓
+                </div>
+              </div>
+            )}
+
             {result.alternatives && result.alternatives.length > 0 && (
               <>
-                <div className="other-label">Other Options</div>
+                <div className="other-label" style={{marginTop: '20px'}}>Other Options</div>
                 <div className="hospital-list">
                   {result.alternatives.map((alt, i) => (
                     <div className="hospital-card" key={i}>
