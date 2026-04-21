@@ -5,3 +5,10 @@ scikit-learn
 joblib
 geopy
 numpy
+streamlit
+Pillow
+pyzbar
+pytesseract
+PyMuPDF
+requests
+beautifulsoup4

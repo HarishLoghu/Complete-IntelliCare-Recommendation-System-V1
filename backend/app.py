@@ -1,31 +1,68 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import os
+from pathlib import Path
 import pandas as pd
 import joblib
-import math
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
 app = Flask(__name__)
-# Enable CORS completely aggressively
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# Allow CORS origin override via env; defaults to all origins for local development.
+CORS(app, resources={r"/api/*": {"origins": os.getenv("CORS_ORIGINS", "*")}})
 
-# Load machine learning models and data at startup
-try:
+BASE_DIR = Path(__file__).resolve().parent
+lr_model = None
+rf_clf = None
+symptom_classifier = None
+HOSPITALS = pd.DataFrame()
+
+
+def load_backend_assets():
+    global lr_model, rf_clf, symptom_classifier, HOSPITALS
     print("Loading models and hospital data...")
-    lr_model = joblib.load('linear_regression_wait_time.pkl')
-    rf_clf = joblib.load('random_forest_bed_clf.pkl')
-    HOSPITALS = pd.read_csv('hospitals_data.csv')
-    
-    # AI Layer: Symptom Classifier
-    symptom_classifier = joblib.load('symptom_classifier.pkl')
-    
-    print("Successfully loaded backend models.")
-except FileNotFoundError as e:
-    print(f"File not found: {e}. Attempting to train symptom model automatically...")
-    from train_nlp_model import pipeline
-    symptom_classifier = pipeline
-    print("Self-trained NLP fallback live.")
+
+    data_path = BASE_DIR / "hospitals_data.csv"
+    if not data_path.exists():
+        raise FileNotFoundError(f"Required file missing: {data_path}")
+
+    HOSPITALS = pd.read_csv(data_path)
+    required_cols = {"name", "lat", "lon", "departments"}
+    missing_cols = required_cols - set(HOSPITALS.columns)
+    if missing_cols:
+        raise ValueError(f"hospitals_data.csv is missing columns: {sorted(missing_cols)}")
+
+    HOSPITALS["lat"] = pd.to_numeric(HOSPITALS["lat"], errors="coerce")
+    HOSPITALS["lon"] = pd.to_numeric(HOSPITALS["lon"], errors="coerce")
+    HOSPITALS = HOSPITALS.dropna(subset=["lat", "lon", "departments"]).copy()
+
+    lr_path = BASE_DIR / "linear_regression_wait_time.pkl"
+    rf_path = BASE_DIR / "random_forest_bed_clf.pkl"
+    symptom_path = BASE_DIR / "symptom_classifier.pkl"
+
+    if lr_path.exists():
+        lr_model = joblib.load(lr_path)
+    if rf_path.exists():
+        rf_clf = joblib.load(rf_path)
+    if symptom_path.exists():
+        symptom_classifier = joblib.load(symptom_path)
+
+    if symptom_classifier is None:
+        print("Symptom model not found. Attempting fallback pipeline import...")
+        try:
+            from train_nlp_model import pipeline
+            symptom_classifier = pipeline
+            print("Fallback NLP pipeline loaded.")
+        except Exception as e:
+            print(f"Fallback NLP pipeline unavailable: {e}")
+
+    print("Backend assets loaded.")
+
+
+try:
+    load_backend_assets()
+except Exception as e:
+    print(f"Startup warning: {e}")
 
 # Initialize geolocator
 geolocator = Nominatim(user_agent="hospital-recommendation-system")
@@ -335,7 +372,7 @@ def filter_hospitals_by_doctor(doctor_type):
         if pd.isna(departments_str): return False
         # Strip surrounding quotes if any, then split on semicolons
         clean = str(departments_str).strip('"').strip("'")
-        depts = [d.strip().lower() for d in clean.split(';')]
+        depts = [d.strip().lower() for d in clean.replace(';', ',').split(',')]
         return doctor_type in depts
 
     filtered = HOSPITALS[HOSPITALS["departments"].apply(has_department)].copy()
@@ -395,6 +432,8 @@ def get_realtime_wait(hospital_name, hospital_type, base_wait_min):
 
 def predict_wait_and_bed():
     """Predict bed availability using ML model."""
+    if rf_clf is None:
+        return 1
     sample = pd.DataFrame([{
         "num_lab_procedures": 45,
         "num_procedures": 2,
@@ -407,18 +446,20 @@ def predict_wait_and_bed():
 @app.route('/api/recommend', methods=['POST'])
 def recommend():
     """API endpoint to receive user location and required specialty (or symptom) and recommend the best hospital."""
-    data = request.json
-    user_location = data.get('location')
-    doctor_type = data.get('specialty')
-    symptom_text = data.get('symptom', '')
+    if HOSPITALS.empty:
+        return jsonify({"error": "Hospital dataset is not loaded on the server."}), 500
+
+    data = request.get_json(silent=True) or {}
+    user_location = str(data.get('location', '')).strip()
+    doctor_type = str(data.get('specialty', '')).strip()
+    symptom_text = str(data.get('symptom', '')).strip()
     
     predicted_by_ai = False
     ai_confidence = 0.0
 
     # AI Layer: If symptom is typed, use classifier to choose specialty
-    if symptom_text and symptom_text.strip():
+    if symptom_text and symptom_classifier is not None:
         try:
-            from sklearn.pipeline import Pipeline
             prediction = symptom_classifier.predict([symptom_text])[0]
             confidence_array = symptom_classifier.predict_proba([symptom_text])[0]
             import numpy as np
@@ -437,7 +478,7 @@ def recommend():
     
     # 1. Convert user location string to coordinates
     user_lat, user_lon = geocode_location(user_location)
-    if not user_lat or not user_lon:
+    if user_lat is None or user_lon is None:
         return jsonify({"error": f"Could not find coordinates for location: {user_location}. Try another area (e.g., 'Adyar', 'Guindy')."}), 404
 
     # 2. Filter hospitals by doctor type
@@ -456,7 +497,7 @@ def recommend():
 
     # 5. Compute REAL-TIME wait per hospital (time-of-day aware)
     eligible["predicted_wait"] = eligible.apply(
-        lambda r: get_realtime_wait(r["name"], r.get("hospital_type", "multi"), float(r["avg_wait_min"])),
+        lambda r: get_realtime_wait(r["name"], r.get("hospital_type", "multi"), float(r.get("avg_wait_min", 30))),
         axis=1
     )
     eligible["bed_available"] = predicted_bed

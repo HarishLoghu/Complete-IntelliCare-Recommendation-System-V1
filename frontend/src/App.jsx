@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { HOSPITALS } from './hospitalsData'
 import './App.css'
 
 // Leaflet GIS Mapping Imports
@@ -51,24 +50,12 @@ const SPECIALTIES = [
   "Gynecologist"
 ]
 
-function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
 function App() {
+  const [view, setView] = useState('landing') // 'landing' | 'hospital'
   const [formData, setFormData] = useState({
     location: '',
     specialty: 'General Physician',
-    symptom: '',
-    urgency: 'low', // 'low' | 'med' | 'high'
-    distanceLimit: '5'
+    symptom: ''
   })
   
   const [loading, setLoading] = useState(false)
@@ -102,10 +89,6 @@ function App() {
     setFormData({ ...formData, [e.target.name]: e.target.value })
   }
 
-  const setUrgency = (level) => {
-    setFormData({ ...formData, urgency: level })
-  }
-
   const handleSubmit = async (e) => {
     if (e) e.preventDefault()
     setLoading(true)
@@ -129,15 +112,16 @@ function App() {
         })
       });
 
-      let data;
+      const raw = await res.text();
+      let data = null;
       try {
-        data = await res.json();
-      } catch (e) {
-        throw new Error("Python fallback needed.");
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        throw new Error("Backend service is unavailable. Please check if Flask server is running on port 5000.");
       }
 
       if (!res.ok) {
-        throw new Error(data.error || 'Server calculation failed');
+        throw new Error((data && data.error) || `Server calculation failed (HTTP ${res.status})`);
       }
       
       const rec = data.recommendation;
@@ -181,7 +165,7 @@ function App() {
     <div className="app">
       {/* ── HEADER ── */}
       <header>
-        <div className="logo">
+        <div className="logo" onClick={() => setView('landing')} style={{cursor: 'pointer'}}>
           <div className="logo-icon">🏥</div>
           <div className="logo-text">Intelli<span>Care</span></div>
         </div>
@@ -195,236 +179,274 @@ function App() {
         </button>
       </header>
 
-      {/* ── HERO ── */}
-      {!result && (
-        <div className="hero">
-          <div className="hero-tag">AI-Powered Triage</div>
-          <h1>Find the <em>right hospital,</em><br/>right now.</h1>
-          <p>Real-time bed availability, wait times & specialist matching — all in seconds.</p>
+      {/* ── LANDING VIEW ── */}
+      {view === 'landing' && (
+        <div className="landing-container">
+          <div className="hero" style={{paddingTop: '60px'}}>
+            <div className="hero-tag">Intelligent Assistance</div>
+            <h1>How can we <em>help you</em> today?</h1>
+            <p>Select a service below to leverage our AI-powered healthcare platform.</p>
+          </div>
+          
+          <div className="landing-cards">
+            <div className="feature-card" onClick={() => setView('hospital')}>
+              <div className="feature-icon">🏥</div>
+              <h2>Find Hospital</h2>
+              <p>AI Triage, accurate wait times, and live bed availability near you.</p>
+              <div className="feature-btn">Launch Tool &rarr;</div>
+            </div>
+
+            <div className="feature-card" onClick={() => window.open('http://localhost:8501', '_blank')}>
+              <div className="feature-icon">💊</div>
+              <h2>Medicine Verifier</h2>
+              <p>Scan medicine or bills to verify active recalls, interactions & MRP pricing.</p>
+              <div className="feature-btn">Launch Tool &rarr;</div>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* ── MAIN ── */}
-      <div className={`main ${!result ? 'center-mode' : ''}`} style={{ marginTop: result ? '40px' : '0' }}>
-        
-        {/* ── SEARCH PANEL ── */}
-        <div className="search-panel">
-          <div className="panel-label">Search Parameters</div>
-
-          <div className="field">
-            <label>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
-              Your Location
-            </label>
-            <input 
-              type="text" 
-              name="location"
-              placeholder="e.g., Velachery" 
-              value={formData.location}
-              onChange={handleChange}
-            />
-          </div>
-
-          <div className="field">
-            <label>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              Describe Symptoms (AI Smart Match)
-            </label>
-            <textarea 
-              name="symptom"
-              placeholder="e.g., severe headache and dizziness..." 
-              value={formData.symptom}
-              onChange={handleChange}
-              rows="2"
-              style={{
-                width: '100%', padding: '12px', borderRadius: '10px',
-                border: '2px solid var(--border)', background: 'var(--card-bg)',
-                color: 'var(--text-main)', fontFamily: 'inherit', resize: 'none'
-              }}
-            />
-          </div>
-
-          <div style={{textAlign: 'center', margin: '10px 0', fontSize: '0.8rem', color: 'var(--text-muted)'}}>— OR SELECT MANUALLY —</div>
-
-          <div className="field">
-            <label>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-              Required Specialist
-            </label>
-            <div className="select-wrap">
-              <select name="specialty" value={formData.specialty} onChange={handleChange}>
-                {SPECIALTIES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+      {/* ── HOSPITAL SYSTEM VIEW ── */}
+      {view === 'hospital' && (
+        <>
+          {/* ── HERO ── */}
+          {!result && (
+            <div className="hero" style={{paddingTop: '40px'}}>
+              <div className="hero-tag" style={{cursor: 'pointer'}} onClick={() => setView('landing')}>&larr; Back to Home</div>
+              <h1>Find the <em>right hospital,</em><br/>right now.</h1>
+              <p>Real-time bed availability, wait times & specialist matching — all in seconds.</p>
             </div>
-          </div>
+          )}
 
-          {error && <div className="error-banner">{error}</div>}
-
-          <button className="cta-btn" onClick={handleSubmit} disabled={loading}>
-            {loading ? 'Analyzing with AI...' : 'Find Best Hospital \u2192'}
-          </button>
-
-          <div className="live-pill">
-            <div className="live-dot"></div>
-            Equipped with TF-IDF SVM Intelligence
-          </div>
-        </div>
-
-        {/* ── RESULTS PANEL ── */}
-        {result && result.recommendation && (
-          <div className="results-panel">
+          {/* ── MAIN ── */}
+          <div className={`main ${!result ? 'center-mode' : ''}`} style={{ marginTop: result ? '40px' : '0' }}>
             
-            <button 
-              className="reset-btn" 
-              onClick={() => {
-                setResult(null);
-                setFormData({ location: '', specialty: 'General Physician', urgency: 'low', distanceLimit: '5' });
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-              Start New Search
-            </button>
-
-            <div className="top-rec">
-              <div className="rec-badge">⭐ Top Recommendation</div>
-              <div className="rec-name">{result.recommendation.name}</div>
-              <div className="rec-type">Hospital Facility</div>
-
-              {result.aiTriage && result.aiTriage.predicted_by_ai && (
-                <div style={{
-                  background: 'rgba(0, 212, 170, 0.1)', border: '1px solid #00d4aa',
-                  padding: '10px 14px', borderRadius: '10px', marginTop: '12px',
-                  display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.88rem'
-                }}>
-                  <span style={{fontSize: '1.2rem'}}>🩺</span>
-                  <div>
-                    <strong style={{color: '#00d4aa'}}>AI Triage Match:</strong> {result.recommendation.departments[0]} 
-                    <span style={{color: 'var(--text-muted)', marginLeft: '6px'}}>({(result.aiTriage.ai_confidence * 100).toFixed(1)}% confidence)</span>
-                  </div>
-                </div>
+            {/* ── SEARCH PANEL ── */}
+            <div className="search-panel">
+              {result && (
+                  <button onClick={() => setView('landing')} style={{marginBottom: '20px', background: 'none', border: '1px solid var(--border)', padding: '6px 12px', borderRadius: '8px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px'}}>
+                    &larr; Home
+                  </button>
               )}
+              <div className="panel-label">Search Parameters</div>
 
-              <div className="stats-grid">
-                <div className="stat-box">
-                  <div className="stat-key">Distance</div>
-                  <div className="stat-val teal">{result.recommendation.distance_km}</div>
-                  <div className="stat-unit">km away</div>
-                </div>
-                <div className="stat-box">
-                  <div className="stat-key">OPD Wait</div>
-                  <div className="stat-val amber">{result.recommendation.estimated_wait_min}</div>
-                  <div className="stat-unit">mins · <strong style={{color: result.recommendation.wait_level === 'Low' ? '#00d4aa' : result.recommendation.wait_level === 'Very High' ? '#ff5e5e' : '#f5a623'}}>{result.recommendation.wait_level}</strong></div>
-                </div>
-                <div className="stat-box">
-                  <div className="stat-key">Rating</div>
-                  <div className="stat-val">{result.recommendation.rating}</div>
-                  <div className="stat-unit"><span className="stars">★★★★</span>★</div>
-                </div>
-                <div className="stat-box">
-                  <div className="stat-key">Beds Free</div>
-                  <div className="stat-val teal">{result.recommendation.freeBeds}</div>
-                  <div className="stat-unit">of {result.recommendation.totalBeds} total</div>
+              <div className="field">
+                <label>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
+                  Your Location
+                </label>
+                <input 
+                  type="text" 
+                  name="location"
+                  placeholder="e.g., Velachery" 
+                  value={formData.location}
+                  onChange={handleChange}
+                />
+              </div>
+
+              <div className="field">
+                <label>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  Describe Symptoms (AI Smart Match)
+                </label>
+                <textarea 
+                  name="symptom"
+                  placeholder="e.g., severe headache and dizziness..." 
+                  value={formData.symptom}
+                  onChange={handleChange}
+                  rows="2"
+                  style={{
+                    width: '100%', padding: '12px', borderRadius: '10px',
+                    border: '2px solid var(--border)', background: 'var(--card-bg)',
+                    color: 'var(--text-main)', fontFamily: 'inherit', resize: 'none'
+                  }}
+                />
+              </div>
+
+              <div style={{textAlign: 'center', margin: '10px 0', fontSize: '0.8rem', color: 'var(--text-muted)'}}>— OR SELECT MANUALLY —</div>
+
+              <div className="field">
+                <label>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                  Required Specialist
+                </label>
+                <div className="select-wrap">
+                  <select name="specialty" value={formData.specialty} onChange={handleChange}>
+                    {SPECIALTIES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
                 </div>
               </div>
 
-              {result.computedAt && (
-                <div className="live-pill" style={{marginBottom: '12px'}}>
-                  <div className="live-dot"></div>
-                  Real-time wait computed at {result.computedAt}
-                </div>
-              )}
+              {error && <div className="error-banner">{error}</div>}
 
-              <div className="availability-row">
-                <span className="avail-label">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
-                  {result.recommendation.departments[0]} available
-                </span>
-                <span className="avail-badge">BEDS OPEN</span>
-              </div>
+              <button className="cta-btn" onClick={handleSubmit} disabled={loading}>
+                {loading ? 'Analyzing with AI...' : 'Find Best Hospital \u2192'}
+              </button>
 
-              <div className="specialists">
-                {result.recommendation.departments.slice(0, 5).map(dep => (
-                  <span key={dep} className="spec-tag">{dep}</span>
-                ))}
+              <div className="live-pill">
+                <div className="live-dot"></div>
+                Equipped with TF-IDF SVM Intelligence
               </div>
             </div>
 
-            {/* ── LIVE INTERACTIVE GIS MAP ── */}
-            {result.userCoords && result.hospitalCoords && (
-              <div style={{
-                marginTop: '15px', borderRadius: '15px', overflow: 'hidden',
-                height: '280px', border: '2px solid var(--border)', zIndex: 1,
-                position: 'relative'
-              }}>
-                <MapContainer 
-                  center={result.userCoords} 
-                  zoom={12} 
-                  style={{ height: '100%', width: '100%' }}
-                  zoomControl={false}
+            {/* ── RESULTS PANEL ── */}
+            {result && result.recommendation && (
+              <div className="results-panel">
+                
+                <button 
+                  className="reset-btn" 
+                  onClick={() => {
+                    setResult(null);
+                    setFormData({ location: '', specialty: 'General Physician', symptom: '' });
+                  }}
                 >
-                  <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                  />
-                  <ChangeMapCenter userCoords={result.userCoords} hospitalCoords={result.hospitalCoords} />
-                  
-                  {/* User Marker */}
-                  <Marker position={result.userCoords} icon={userIcon}>
-                    <Popup>Your Location</Popup>
-                  </Marker>
-                  
-                  {/* Hospital Marker */}
-                  <Marker position={result.hospitalCoords} icon={hospitalIcon}>
-                    <Popup>{result.recommendation.name}</Popup>
-                  </Marker>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                  Start New Search
+                </button>
 
-                  {/* Connecting Line (Air Vector Router) */}
-                  <Polyline 
-                    positions={[result.userCoords, result.hospitalCoords]} 
-                    color="#00d4aa" 
-                    weight={4} 
-                    opacity={0.9}
-                  />
-                </MapContainer>
-                <div style={{
-                  position: 'absolute', bottom: '10px', right: '10px', 
-                  zIndex: 1000, background: 'var(--card-bg)', padding: '5px 10px',
-                  borderRadius: '10px', fontSize: '0.75rem', border: '1px solid var(--border)'
-                }}>
-                  Live Route trace plotting ✓
-                </div>
-              </div>
-            )}
+                <div className="top-rec">
+                  <div className="rec-badge">⭐ Top Recommendation</div>
+                  <div className="rec-name">{result.recommendation.name}</div>
+                  <div className="rec-type">Hospital Facility</div>
 
-            {result.alternatives && result.alternatives.length > 0 && (
-              <>
-                <div className="other-label" style={{marginTop: '20px'}}>Other Options</div>
-                <div className="hospital-list">
-                  {result.alternatives.map((alt, i) => (
-                    <div className="hospital-card" key={i}>
-                      <div className="hospital-rank">0{i+2}</div>
-                      <div className="hospital-info">
-                        <div className="hospital-name">{alt.name}</div>
-                        <div className="hospital-meta">
-                          <span>{alt.departments && alt.departments.length > 1 ? 'Multi-Specialty' : (alt.departments && alt.departments[0]) || 'Clinic'}</span>
-                          <span>Wait: {alt.estimated_wait_min} mins · <span style={{color: alt.wait_level === 'Low' ? '#00d4aa' : alt.wait_level === 'Very High' ? '#ff5e5e' : '#f5a623', fontWeight: 600}}>{alt.wait_level}</span></span>
-                        </div>
-                      </div>
-                      <div className="hospital-right">
-                        <div className="dist-tag">{alt.distance_km} km</div>
-                        <div className="beds-tag avail">BEDS ✓</div>
+                  {result.aiTriage && result.aiTriage.predicted_by_ai && (
+                    <div style={{
+                      background: 'rgba(0, 212, 170, 0.1)', border: '1px solid #00d4aa',
+                      padding: '10px 14px', borderRadius: '10px', marginTop: '12px',
+                      display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.88rem'
+                    }}>
+                      <span style={{fontSize: '1.2rem'}}>🩺</span>
+                      <div>
+                        <strong style={{color: '#00d4aa'}}>AI Triage Match:</strong> {result.recommendation.departments[0]} 
+                        <span style={{color: 'var(--text-muted)', marginLeft: '6px'}}>({(result.aiTriage.ai_confidence * 100).toFixed(1)}% confidence)</span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </>
-            )}
+                  )}
 
+                  <div className="stats-grid">
+                    <div className="stat-box">
+                      <div className="stat-key">Distance</div>
+                      <div className="stat-val teal">{result.recommendation.distance_km}</div>
+                      <div className="stat-unit">km away</div>
+                    </div>
+                    <div className="stat-box">
+                      <div className="stat-key">OPD Wait</div>
+                      <div className="stat-val amber">{result.recommendation.estimated_wait_min}</div>
+                      <div className="stat-unit">mins · <strong style={{color: result.recommendation.wait_level === 'Low' ? '#00d4aa' : result.recommendation.wait_level === 'Very High' ? '#ff5e5e' : '#f5a623'}}>{result.recommendation.wait_level}</strong></div>
+                    </div>
+                    <div className="stat-box">
+                      <div className="stat-key">Rating</div>
+                      <div className="stat-val">{result.recommendation.rating}</div>
+                      <div className="stat-unit"><span className="stars">★★★★</span>★</div>
+                    </div>
+                    <div className="stat-box">
+                      <div className="stat-key">Beds Free</div>
+                      <div className="stat-val teal">{result.recommendation.freeBeds}</div>
+                      <div className="stat-unit">of {result.recommendation.totalBeds} total</div>
+                    </div>
+                  </div>
+
+                  {result.computedAt && (
+                    <div className="live-pill" style={{marginBottom: '12px'}}>
+                      <div className="live-dot"></div>
+                      Real-time wait computed at {result.computedAt}
+                    </div>
+                  )}
+
+                  <div className="availability-row">
+                    <span className="avail-label">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
+                      {result.recommendation.departments[0]} available
+                    </span>
+                    <span className="avail-badge">BEDS OPEN</span>
+                  </div>
+
+                  <div className="specialists">
+                    {result.recommendation.departments.slice(0, 5).map(dep => (
+                      <span key={dep} className="spec-tag">{dep}</span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── LIVE INTERACTIVE GIS MAP ── */}
+                {result.userCoords && result.hospitalCoords && (
+                  <div style={{
+                    marginTop: '15px', borderRadius: '15px', overflow: 'hidden',
+                    height: '280px', border: '2px solid var(--border)', zIndex: 1,
+                    position: 'relative'
+                  }}>
+                    <MapContainer 
+                      center={result.userCoords} 
+                      zoom={12} 
+                      style={{ height: '100%', width: '100%' }}
+                      zoomControl={false}
+                    >
+                      <TileLayer
+                        url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                      />
+                      <ChangeMapCenter userCoords={result.userCoords} hospitalCoords={result.hospitalCoords} />
+                      
+                      {/* User Marker */}
+                      <Marker position={result.userCoords} icon={userIcon}>
+                        <Popup>Your Location</Popup>
+                      </Marker>
+                      
+                      {/* Hospital Marker */}
+                      <Marker position={result.hospitalCoords} icon={hospitalIcon}>
+                        <Popup>{result.recommendation.name}</Popup>
+                      </Marker>
+
+                      {/* Connecting Line (Air Vector Router) */}
+                      <Polyline 
+                        positions={[result.userCoords, result.hospitalCoords]} 
+                        color="#00d4aa" 
+                        weight={4} 
+                        opacity={0.9}
+                      />
+                    </MapContainer>
+                    <div style={{
+                      position: 'absolute', bottom: '10px', right: '10px', 
+                      zIndex: 1000, background: 'var(--card-bg)', padding: '5px 10px',
+                      borderRadius: '10px', fontSize: '0.75rem', border: '1px solid var(--border)'
+                    }}>
+                      Live Route trace plotting ✓
+                    </div>
+                  </div>
+                )}
+
+                {result.alternatives && result.alternatives.length > 0 && (
+                  <>
+                    <div className="other-label" style={{marginTop: '20px'}}>Other Options</div>
+                    <div className="hospital-list">
+                      {result.alternatives.map((alt, i) => (
+                        <div className="hospital-card" key={i}>
+                          <div className="hospital-rank">0{i+2}</div>
+                          <div className="hospital-info">
+                            <div className="hospital-name">{alt.name}</div>
+                            <div className="hospital-meta">
+                              <span>{alt.departments && alt.departments.length > 1 ? 'Multi-Specialty' : (alt.departments && alt.departments[0]) || 'Clinic'}</span>
+                              <span>Wait: {alt.estimated_wait_min} mins · <span style={{color: alt.wait_level === 'Low' ? '#00d4aa' : alt.wait_level === 'Very High' ? '#ff5e5e' : '#f5a623', fontWeight: 600}}>{alt.wait_level}</span></span>
+                            </div>
+                          </div>
+                          <div className="hospital-right">
+                            <div className="dist-tag">{alt.distance_km} km</div>
+                            <div className="beds-tag avail">BEDS ✓</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   )
+
 }
 
 export default App
